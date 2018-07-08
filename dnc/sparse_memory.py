@@ -58,13 +58,18 @@ class SparseMemory(nn.Module):
       T.nn.init.orthogonal(self.write_gate_transform.weight)
     else:
       self.interface_size = (r * w) + w + self.c + 1
-      self.interface_weights = nn.Linear(self.input_size, self.interface_size)
+      if self.gpu_id != -1:
+        self.interface_weights = nn.Linear(self.input_size, self.interface_size).cuda()
+      else:
+        self.interface_weights = nn.Linear(self.input_size, self.interface_size)
       T.nn.init.orthogonal(self.interface_weights.weight)
 
     self.I = cuda(1 - T.eye(self.c).unsqueeze(0), gpu_id=self.gpu_id)  # (1 * n * n)
     self.δ = 0.005  # minimum usage
     self.timestep = 0
     self.mem_limit_reached = False
+    if self.gpu_id != -1:
+        self.cuda()
 
   def rebuild_indexes(self, hidden, erase=False):
     b = hidden['memory'].size(0)
@@ -93,7 +98,10 @@ class SparseMemory(nn.Module):
     if not erase:
       for n, i in enumerate(hidden['indexes']):
         i.reset()
-        i.add(hidden['memory'][n], last=pos[n][-1])
+        try:
+          i.add(hidden['memory'][n], last=pos[n][-1])
+        except ValueError:
+          pass
     else:
       self.timestep = 0
       self.mem_limit_reached = False
@@ -272,7 +280,7 @@ class SparseMemory(nn.Module):
 
     return hidden['read_vectors'], hidden
 
-  def forward(self, ξ, hidden):
+  def forward(self, ξ, hidden, write_enabled=True):
     t = time.time()
 
     # ξ = ξ.detach()
@@ -303,5 +311,6 @@ class SparseMemory(nn.Module):
       write_gate = F.sigmoid(ξ[:, -1].contiguous()).unsqueeze(1).view(b, 1)
 
     self.timestep += 1
-    hidden = self.write(interpolation_gate, write_vector, write_gate, hidden)
+    if write_enabled:
+      hidden = self.write(interpolation_gate, write_vector, write_gate, hidden)
     return self.read(read_query, hidden)
