@@ -2,6 +2,7 @@
 # -*- coding: utf-8 -*-
 
 from .dnc import DNC
+from .ffsam import FFSAM
 from .sdnc import SDNC
 from .sam import SAM
 from .memory import Memory

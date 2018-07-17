@@ -39,6 +39,7 @@ class DNC(nn.Module):
       independent_linears=False,
       share_memory=True,
       debug=False,
+      define_layers=True,
       clip=20
   ):
     super(DNC, self).__init__()
@@ -64,6 +65,7 @@ class DNC(nn.Module):
     self.share_memory = share_memory
     self.debug = debug
     self.clip = clip
+    self.define_layers = define_layers
 
     self.w = self.cell_size
     self.r = self.read_heads
@@ -77,31 +79,32 @@ class DNC(nn.Module):
     self.rnns = []
     self.memories = []
 
-    for layer in range(self.num_layers):
-      if self.rnn_type.lower() == 'rnn':
-        self.rnns.append(nn.RNN((self.input_size if layer == 0 else self.nn_output_size), self.output_size,
-                                bias=self.bias, nonlinearity=self.nonlinearity, batch_first=self.batch_first, dropout=self.dropout, num_layers=self.num_hidden_layers))
-      elif self.rnn_type.lower() == 'gru':
-        self.rnns.append(nn.GRU((self.input_size if layer == 0 else self.nn_output_size),
-                                self.output_size, bias=self.bias, batch_first=self.batch_first, dropout=self.dropout, num_layers=self.num_hidden_layers))
-      if self.rnn_type.lower() == 'lstm':
-        self.rnns.append(nn.LSTM((self.input_size if layer == 0 else self.nn_output_size),
-                                 self.output_size, bias=self.bias, batch_first=self.batch_first, dropout=self.dropout, num_layers=self.num_hidden_layers))
-      setattr(self, self.rnn_type.lower() + '_layer_' + str(layer), self.rnns[layer])
+    if self.define_layers:
+      for layer in range(self.num_layers):
+        if self.rnn_type.lower() == 'rnn':
+          self.rnns.append(nn.RNN((self.input_size if layer == 0 else self.nn_output_size), self.output_size,
+                                  bias=self.bias, nonlinearity=self.nonlinearity, batch_first=self.batch_first, dropout=self.dropout, num_layers=self.num_hidden_layers))
+        elif self.rnn_type.lower() == 'gru':
+          self.rnns.append(nn.GRU((self.input_size if layer == 0 else self.nn_output_size),
+                                  self.output_size, bias=self.bias, batch_first=self.batch_first, dropout=self.dropout, num_layers=self.num_hidden_layers))
+        if self.rnn_type.lower() == 'lstm':
+          self.rnns.append(nn.LSTM((self.input_size if layer == 0 else self.nn_output_size),
+                                   self.output_size, bias=self.bias, batch_first=self.batch_first, dropout=self.dropout, num_layers=self.num_hidden_layers))
+        setattr(self, self.rnn_type.lower() + '_layer_' + str(layer), self.rnns[layer])
 
-      # memories for each layer
-      if not self.share_memory:
-        self.memories.append(
-            Memory(
-                input_size=self.output_size,
-                mem_size=self.nr_cells,
-                cell_size=self.w,
-                read_heads=self.r,
-                gpu_id=self.gpu_id,
-                independent_linears=self.independent_linears
-            )
-        )
-        setattr(self, 'rnn_layer_memory_' + str(layer), self.memories[layer])
+        # memories for each layer
+        if not self.share_memory:
+          self.memories.append(
+              Memory(
+                  input_size=self.output_size,
+                  mem_size=self.nr_cells,
+                  cell_size=self.w,
+                  read_heads=self.r,
+                  gpu_id=self.gpu_id,
+                  independent_linears=self.independent_linears
+              )
+          )
+          setattr(self, 'rnn_layer_memory_' + str(layer), self.memories[layer])
 
     # only one memory shared by all layers
     if self.share_memory:
@@ -120,16 +123,17 @@ class DNC(nn.Module):
     # final output layer
     # self.output = nn.Linear(self.nn_output_size, self.real_output_size)
     # orthogonal(self.output.weight)
-    self.output = nn.Sequential(
-        nn.Linear(self.nn_output_size, self.hidden_size),
-        nn.Tanh(),
-        nn.Linear(self.hidden_size, self.real_output_size)
-    )
+    if self.define_layers:
+      self.output = nn.Sequential(
+          nn.Linear(self.nn_output_size, self.hidden_size),
+          nn.Tanh(),
+          nn.Linear(self.hidden_size, self.real_output_size)
+      )
 
-    if self.gpu_id != -1:
-      [x.cuda(self.gpu_id) for x in self.rnns]
-      [x.cuda(self.gpu_id) for x in self.memories]
-      self.output.cuda()
+      if self.gpu_id != -1:
+        [x.cuda(self.gpu_id) for x in self.rnns]
+        [x.cuda(self.gpu_id) for x in self.memories]
+        self.output.cuda()
  
   def _init_hidden(self, hx, batch_size, reset_experience):
     # create empty hidden states if not provided
@@ -305,6 +309,3 @@ class DNC(nn.Module):
     s += ")\n" + super(DNC, self).__repr__() + \
       "\n----------------------------------------\n"
     return s.format(name=self.__class__.__name__, **self.__dict__)
-
-
-

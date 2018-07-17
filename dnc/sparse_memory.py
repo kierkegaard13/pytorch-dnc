@@ -286,7 +286,7 @@ class SparseMemory(nn.Module):
 
     return hidden['read_vectors'], hidden
 
-  def forward(self, ξ, hidden):
+  def forward(self, ξ, hidden, write_enabled=True):
     t = time.time()
 
     # ξ = ξ.detach()
@@ -317,5 +317,6 @@ class SparseMemory(nn.Module):
       write_gate = F.sigmoid(ξ[:, -1].contiguous()).unsqueeze(1).view(b, 1)
 
     self.timestep += 1
-    hidden = self.write(interpolation_gate, write_vector, write_gate, hidden)
+    if write_enabled:
+      hidden = self.write(interpolation_gate, write_vector, write_gate, hidden)
     return self.read(read_query, hidden)
