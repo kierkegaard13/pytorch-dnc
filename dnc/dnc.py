@@ -13,7 +13,7 @@ from torch.nn.utils.rnn import PackedSequence
 from .util import *
 from .memory import *
 
-from torch.nn.init import orthogonal, xavier_uniform
+from torch.nn.init import orthogonal, xavier_uniform_
 
 
 class DNC(nn.Module):
@@ -22,11 +22,13 @@ class DNC(nn.Module):
       self,
       input_size,
       hidden_size,
+      output_size,
       rnn_type='lstm',
       num_layers=1,
       num_hidden_layers=2,
       bias=True,
       batch_first=True,
+      batch_size=32,
       dropout=0,
       bidirectional=False,
       nr_cells=5,
@@ -43,12 +45,14 @@ class DNC(nn.Module):
     # todo: separate weights and RNNs for the interface and output vectors
 
     self.input_size = input_size
+    self.real_output_size = output_size
     self.hidden_size = hidden_size
     self.rnn_type = rnn_type
     self.num_layers = num_layers
     self.num_hidden_layers = num_hidden_layers
     self.bias = bias
     self.batch_first = batch_first
+    self.batch_size = batch_size
     self.dropout = dropout
     self.bidirectional = bidirectional
     self.nr_cells = nr_cells
@@ -75,14 +79,14 @@ class DNC(nn.Module):
 
     for layer in range(self.num_layers):
       if self.rnn_type.lower() == 'rnn':
-        self.rnns.append(nn.RNN((self.nn_input_size if layer == 0 else self.nn_output_size), self.output_size,
-                                bias=self.bias, nonlinearity=self.nonlinearity, batch_first=True, dropout=self.dropout, num_layers=self.num_hidden_layers))
+        self.rnns.append(nn.RNN((self.input_size if layer == 0 else self.nn_output_size), self.output_size,
+                                bias=self.bias, nonlinearity=self.nonlinearity, batch_first=self.batch_first, dropout=self.dropout, num_layers=self.num_hidden_layers))
       elif self.rnn_type.lower() == 'gru':
-        self.rnns.append(nn.GRU((self.nn_input_size if layer == 0 else self.nn_output_size),
-                                self.output_size, bias=self.bias, batch_first=True, dropout=self.dropout, num_layers=self.num_hidden_layers))
+        self.rnns.append(nn.GRU((self.input_size if layer == 0 else self.nn_output_size),
+                                self.output_size, bias=self.bias, batch_first=self.batch_first, dropout=self.dropout, num_layers=self.num_hidden_layers))
       if self.rnn_type.lower() == 'lstm':
-        self.rnns.append(nn.LSTM((self.nn_input_size if layer == 0 else self.nn_output_size),
-                                 self.output_size, bias=self.bias, batch_first=True, dropout=self.dropout, num_layers=self.num_hidden_layers))
+        self.rnns.append(nn.LSTM((self.input_size if layer == 0 else self.nn_output_size),
+                                 self.output_size, bias=self.bias, batch_first=self.batch_first, dropout=self.dropout, num_layers=self.num_hidden_layers))
       setattr(self, self.rnn_type.lower() + '_layer_' + str(layer), self.rnns[layer])
 
       # memories for each layer
@@ -114,44 +118,45 @@ class DNC(nn.Module):
       setattr(self, 'rnn_layer_memory_shared', self.memories[0])
 
     # final output layer
-    self.output = nn.Linear(self.nn_output_size, self.input_size)
-    orthogonal(self.output.weight)
+    # self.output = nn.Linear(self.nn_output_size, self.real_output_size)
+    # orthogonal(self.output.weight)
+    self.output = nn.Sequential(
+        nn.Linear(self.nn_output_size, self.hidden_size),
+        nn.Tanh(),
+        nn.Linear(self.hidden_size, self.real_output_size)
+    )
 
     if self.gpu_id != -1:
       [x.cuda(self.gpu_id) for x in self.rnns]
       [x.cuda(self.gpu_id) for x in self.memories]
       self.output.cuda()
-
+ 
   def _init_hidden(self, hx, batch_size, reset_experience):
     # create empty hidden states if not provided
     if hx is None:
-      hx = (None, None, None)
-    (chx, mhx, last_read) = hx
+      hx = (None, None)
+    chx, mhx = hx
 
     # initialize hidden state of the controller RNN
     if chx is None:
       h = cuda(T.zeros(self.num_hidden_layers, batch_size, self.output_size), gpu_id=self.gpu_id)
-      xavier_uniform(h)
+      xavier_uniform_(h)
 
       chx = [ (h, h) if self.rnn_type.lower() == 'lstm' else h for x in range(self.num_layers)]
-
-    # Last read vectors
-    if last_read is None:
-      last_read = cuda(T.zeros(batch_size, self.w * self.r), gpu_id=self.gpu_id)
 
     # memory states
     if mhx is None:
       if self.share_memory:
-        mhx = self.memories[0].reset(batch_size, erase=reset_experience)
+        mhx = self.memories[0].reset(self.batch_size, erase=reset_experience)
       else:
-        mhx = [m.reset(batch_size, erase=reset_experience) for m in self.memories]
+        mhx = [m.reset(self.batch_size, erase=reset_experience) for m in self.memories]
     else:
       if self.share_memory:
-        mhx = self.memories[0].reset(batch_size, mhx, erase=reset_experience)
+        mhx = self.memories[0].reset(self.batch_size, mhx, erase=reset_experience)
       else:
-        mhx = [m.reset(batch_size, h, erase=reset_experience) for m, h in zip(self.memories, mhx)]
+        mhx = [m.reset(self.batch_size, h, erase=reset_experience) for m, h in zip(self.memories, mhx)]
 
-    return chx, mhx, last_read
+    return chx, mhx
 
   def _debug(self, mhx, debug_obj):
     if not debug_obj:
@@ -176,8 +181,7 @@ class DNC(nn.Module):
     (chx, mhx) = hx
 
     # pass through the controller layer
-    input, chx = self.rnns[layer](input.unsqueeze(1), chx)
-    input = input.squeeze(1)
+    input, chx = self.rnns[layer](input, chx)
 
     # clip the controller output
     if self.clip != 0:
@@ -186,7 +190,7 @@ class DNC(nn.Module):
       output = input
 
     # the interface vector
-    ξ = output
+    ξ = output[-1, :, :]
 
     # pass through memory
     if pass_through_memory:
@@ -201,26 +205,19 @@ class DNC(nn.Module):
 
     return output, (chx, mhx, read_vectors)
 
-  def forward(self, input, hx=(None, None, None), reset_experience=False, pass_through_memory=True):
+  def forward(self, x, hx=(None, None), reset_experience=False, pass_through_memory=True):
     # handle packed data
-    is_packed = type(input) is PackedSequence
+    is_packed = type(x) is PackedSequence
     if is_packed:
-      input, lengths = pad(input)
+      x, lengths = pad(x)
       max_length = lengths[0]
     else:
-      max_length = input.size(1) if self.batch_first else input.size(0)
-      lengths = [input.size(1)] * max_length if self.batch_first else [input.size(0)] * max_length
+      max_length = x.size(1) if self.batch_first else x.size(0)
+      lengths = [x.size(1)] * max_length if self.batch_first else [x.size(0)] * max_length
 
-    batch_size = input.size(0) if self.batch_first else input.size(1)
+    batch_size = x.size(0) if self.batch_first else x.size(1)
 
-    if not self.batch_first:
-      input = input.transpose(0, 1)
-    # make the data time-first
-
-    controller_hidden, mem_hidden, last_read = self._init_hidden(hx, batch_size, reset_experience)
-
-    # concat input with last read (or padding) vectors
-    inputs = [T.cat([input[:, x, :], last_read], 1) for x in range(max_length)]
+    controller_hidden, mem_hidden = self._init_hidden(hx, batch_size, reset_experience)
 
     # batched forward pass per element / word / etc
     if self.debug:
@@ -229,50 +226,45 @@ class DNC(nn.Module):
     outs = [None] * max_length
     read_vectors = None
 
-    # pass through time
-    for time in range(max_length):
-      # pass thorugh layers
-      for layer in range(self.num_layers):
-        # this layer's hidden states
-        chx = controller_hidden[layer]
-        m = mem_hidden if self.share_memory else mem_hidden[layer]
-        # pass through controller
-        outs[time], (chx, m, read_vectors) = \
-          self._layer_forward(inputs[time], layer, (chx, m), pass_through_memory)
+    # pass thorugh layers
+    for layer in range(self.num_layers):
+      # this layer's hidden states
+      chx = controller_hidden[layer]
+      m = mem_hidden if self.share_memory else mem_hidden[layer]
+      # pass through controller
+      x, (chx, m, read_vectors) = self._layer_forward(x, layer, (chx, m), pass_through_memory)
 
-        # debug memory
-        if self.debug:
-          viz = self._debug(m, viz)
+      # debug memory
+      if self.debug:
+        viz = self._debug(m, viz)
 
-        # store the memory back (per layer or shared)
-        if self.share_memory:
-          mem_hidden = m
-        else:
-          mem_hidden[layer] = m
-        controller_hidden[layer] = chx
+      # store the memory back (per layer or shared)
+      if self.share_memory:
+        mem_hidden = m
+      else:
+        mem_hidden[layer] = m
+      controller_hidden[layer] = chx
 
-        if read_vectors is not None:
-          # the controller output + read vectors go into next layer
-          outs[time] = T.cat([outs[time], read_vectors], 1)
-        else:
-          outs[time] = T.cat([outs[time], last_read], 1)
-        inputs[time] = outs[time]
+      if read_vectors is not None:
+        # the controller output + read vectors go into next layer
+        x = T.cat([x[-1, :, :], read_vectors], 1)
+      read_vectors = None
 
     if self.debug:
       viz = {k: np.array(v) for k, v in viz.items()}
       viz = {k: v.reshape(v.shape[0], v.shape[1] * v.shape[2]) for k, v in viz.items()}
 
     # pass through final output layer
-    inputs = [self.output(i) for i in inputs]
-    outputs = T.stack(inputs, 1 if self.batch_first else 0)
+    for layer in range(len(self.output)):
+      x = self.output[layer](x)
 
     if is_packed:
-      outputs = pack(output, lengths)
+      x = pack(x, lengths)
 
     if self.debug:
-      return outputs, (controller_hidden, mem_hidden, read_vectors), viz
+      return x, (controller_hidden, mem_hidden), viz
     else:
-      return outputs, (controller_hidden, mem_hidden, read_vectors)
+      return x, (controller_hidden, mem_hidden)
 
   def __repr__(self):
     s = "\n----------------------------------------\n"

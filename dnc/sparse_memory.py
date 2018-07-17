@@ -78,7 +78,7 @@ class SparseMemory(nn.Module):
       self.cuda()
 
   def rebuild_indexes(self, hidden, erase=False):
-    b = hidden['memory'].size(0)
+    b = 1
 
     # if indexes already exist, we reset them
     if 'indexes' in hidden:
@@ -104,6 +104,8 @@ class SparseMemory(nn.Module):
     if not erase:
       for n, i in enumerate(hidden['indexes']):
         i.reset()
+        if pos[n][-1] <= 0:
+            continue
         i.add(hidden['memory'][n], last=pos[n][-1])
     else:
       self.timestep = 0
@@ -128,7 +130,7 @@ class SparseMemory(nn.Module):
           'read_vectors': cuda(T.zeros(b, r, w).fill_(δ), gpu_id=self.gpu_id),
           'least_used_mem': cuda(T.zeros(b, 1).fill_(c + 1), gpu_id=self.gpu_id).long(),
           'usage': cuda(T.zeros(b, m), gpu_id=self.gpu_id),
-          'read_positions': cuda(T.arange(0, c).expand(b, c), gpu_id=self.gpu_id).long()
+          'read_positions': cuda(T.arange(0, c).expand(b, c).contiguous(), gpu_id=self.gpu_id).long()
       }
       hidden = self.rebuild_indexes(hidden, erase=True)
     else:
@@ -151,7 +153,7 @@ class SparseMemory(nn.Module):
         hidden['least_used_mem'].data.fill_(c + 1)
         hidden['usage'].data.fill_(0)
         hidden['read_positions'] = cuda(
-            T.arange(0, c).expand(b, c), gpu_id=self.gpu_id).long()
+            T.arange(0, c).expand(b, c).contiguous(), gpu_id=self.gpu_id).long()
 
     return hidden
 
@@ -167,8 +169,9 @@ class SparseMemory(nn.Module):
     pos = positions.data.cpu().numpy()
     for batch in range(b):
       # update indexes
-      hidden['indexes'][batch].reset()
-      hidden['indexes'][batch].add(hidden['memory'][batch], last=(pos[batch][-1] if not self.mem_limit_reached else None))
+      if batch == 0:
+          hidden['indexes'][0].reset()
+      hidden['indexes'][0].add(hidden['memory'][batch], last=(pos[batch][-1] if not self.mem_limit_reached else None))
 
     mem_limit_reached = hidden['least_used_mem'][0].data.cpu().numpy()[0] >= self.mem_size - 1
     self.mem_limit_reached = mem_limit_reached or self.mem_limit_reached
@@ -237,7 +240,7 @@ class SparseMemory(nn.Module):
 
     # we search for k cells per read head
     for batch in range(b):
-      distances, positions = indexes[batch].search(keys[batch])
+      distances, positions = indexes[0].search(keys[batch])
       read_positions.append(positions)
     read_positions = T.stack(read_positions, 0)
 
