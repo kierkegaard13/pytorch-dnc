@@ -28,6 +28,6 @@ def generate_data(batch_size, length, size, cuda=-1):
 
 def criterion(predictions, targets):
   return T.mean(
-      -1 * F.logsigmoid(predictions) * (targets) - T.log(1 - F.sigmoid(predictions) + 1e-9) * (1 - targets)
+      -1 * F.logsigmoid(predictions) * (targets) - T.log(1 - T.sigmoid(predictions) + 1e-9) * (1 - targets)
   )
 

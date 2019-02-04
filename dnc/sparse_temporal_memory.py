@@ -358,9 +358,9 @@ class SparseTemporalMemory(nn.Module):
       # write key (b * 1 * w)
       write_vector = self.write_vector_transform(ξ).view(b, 1, w)
       # write vector (b * 1 * r)
-      interpolation_gate = F.sigmoid(self.interpolation_gate_transform(ξ)).view(b, c)
+      interpolation_gate = T.sigmoid(self.interpolation_gate_transform(ξ)).view(b, c)
       # write gate (b * 1)
-      write_gate = F.sigmoid(self.write_gate_transform(ξ).view(b, 1))
+      write_gate = T.sigmoid(self.write_gate_transform(ξ).view(b, 1))
     else:
       ξ = self.interface_weights(ξ)
       # r read keys (b * r * w)
@@ -368,9 +368,9 @@ class SparseTemporalMemory(nn.Module):
       # write key (b * 1 * w)
       write_vector = ξ[:, r * w: r * w + w].contiguous().view(b, 1, w)
       # write vector (b * 1 * r)
-      interpolation_gate = F.sigmoid(ξ[:, r * w + w: r * w + w + c]).contiguous().view(b, c)
+      interpolation_gate = T.sigmoid(ξ[:, r * w + w: r * w + w + c]).contiguous().view(b, c)
       # write gate (b * 1)
-      write_gate = F.sigmoid(ξ[:, -1].contiguous()).unsqueeze(1).view(b, 1)
+      write_gate = T.sigmoid(ξ[:, -1].contiguous()).unsqueeze(1).view(b, 1)
 
     self.timestep += 1
     hidden = self.write(interpolation_gate, write_vector, write_gate, hidden)

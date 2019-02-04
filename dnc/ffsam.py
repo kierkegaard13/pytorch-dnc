@@ -46,6 +46,7 @@ class FFSAM(DNC):
         super().__init__(
             input_size=input_size,
             hidden_size=hidden_size,
+            output_size=output_size,
             bias=bias,
             batch_first=batch_first,
             dropout=dropout,
